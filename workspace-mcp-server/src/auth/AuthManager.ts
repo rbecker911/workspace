@@ -67,7 +67,33 @@ export class AuthManager {
         // Check if we have a cached client with valid credentials
         if (this.client && this.client.credentials && this.client.credentials.refresh_token) {
             logToFile('Returning existing cached client with valid credentials');
-            return this.client;
+            logToFile(`Access token exists: ${!!this.client.credentials.access_token}`);
+            logToFile(`Expiry date: ${this.client.credentials.expiry_date}`);
+            logToFile(`Current time: ${Date.now()}`);
+            
+            const isExpired = this.client.credentials.expiry_date ? 
+                this.client.credentials.expiry_date < Date.now() : 
+                false;
+            logToFile(`Token expired: ${isExpired}`);
+            
+            // Proactively refresh if expired
+            if (isExpired) {
+                logToFile('Token is expired, refreshing proactively...');
+                try {
+                    await this.refreshToken();
+                    logToFile('Token refreshed successfully');
+                } catch (error) {
+                    logToFile(`Failed to refresh token: ${error}`);
+                    // Clear the client and fall through to re-authenticate
+                    this.client = null;
+                    await OAuthCredentialStorage.clearCredentials();
+                }
+            }
+            
+            // Return the client (either still valid or just refreshed)
+            if (this.client) {
+                return this.client;
+            }
         }
 
         // Note: No clientSecret is provided here. The secret is only known by the cloud function.
@@ -76,11 +102,54 @@ export class AuthManager {
         };
         const oAuth2Client = new google.auth.OAuth2(options);
 
+        oAuth2Client.on('tokens', async (tokens) => {
+            logToFile('Tokens refreshed event received');
+            if (tokens.refresh_token) {
+                logToFile('New refresh token received in event');
+            }
+            
+            try {
+                // Create a copy to preserve refresh_token from storage
+                const current = await OAuthCredentialStorage.loadCredentials() || {};
+                const merged = {
+                    ...tokens,
+                    refresh_token: tokens.refresh_token || current.refresh_token
+                };
+                await OAuthCredentialStorage.saveCredentials(merged);
+                logToFile('Credentials saved after refresh');
+            } catch (e) {
+                logToFile(`Error saving refreshed credentials: ${e}`);
+            }
+        });
+
         logToFile('No valid cached client, checking for saved credentials...');
         if (await this.loadCachedCredentials(oAuth2Client)) {
             logToFile('Loaded saved credentials, caching and returning client');
             this.client = oAuth2Client;
-            return this.client;
+            
+            // Check if the loaded token is expired and refresh proactively
+            const isExpired = this.client.credentials.expiry_date ? 
+                this.client.credentials.expiry_date < Date.now() : 
+                false;
+            logToFile(`Token expired: ${isExpired}`);
+            
+            if (isExpired) {
+                logToFile('Loaded token is expired, refreshing proactively...');
+                try {
+                    await this.refreshToken();
+                    logToFile('Token refreshed successfully after loading from storage');
+                } catch (error) {
+                    logToFile(`Failed to refresh loaded token: ${error}`);
+                    // Clear the client and fall through to re-authenticate
+                    this.client = null;
+                    await OAuthCredentialStorage.clearCredentials();
+                }
+            }
+            
+            // Return the client if refresh succeeded or token was still valid
+            if (this.client) {
+                return this.client;
+            }
         }
 
         const webLogin = await this.authWithWeb(oAuth2Client);
@@ -104,6 +173,63 @@ export class AuthManager {
         await OAuthCredentialStorage.saveCredentials(oAuth2Client.credentials);
         this.client = oAuth2Client;
         return this.client;
+    }
+
+    public async clearAuth(): Promise<void> {
+        logToFile('Clearing authentication...');
+        this.client = null;
+        await OAuthCredentialStorage.clearCredentials();
+        logToFile('Authentication cleared.');
+    }
+
+    public async refreshToken(): Promise<void> {
+        logToFile('Manual token refresh triggered');
+        if (!this.client) {
+            logToFile('No client available to refresh, getting new client');
+            this.client = await this.getAuthenticatedClient();
+        }
+        try {
+            const currentCredentials = { ...this.client.credentials };
+            
+            if (!currentCredentials.refresh_token) {
+                throw new Error('No refresh token available');
+            }
+            
+            logToFile('Calling cloud function to refresh token...');
+            
+            // Call the cloud function refresh endpoint
+            // The cloud function has the client secret needed for token refresh
+            const response = await fetch('https://google-workspace-extension.geminicli.com/refreshToken', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    refresh_token: currentCredentials.refresh_token
+                })
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`Token refresh failed: ${response.status} ${errorText}`);
+            }
+            
+            const newTokens = await response.json();
+            
+            // Merge new tokens with existing credentials, preserving refresh_token
+            // Note: Google does NOT return a new refresh_token on refresh
+            const mergedCredentials = {
+                ...newTokens,
+                refresh_token: currentCredentials.refresh_token // Always preserve original
+            };
+
+            this.client.setCredentials(mergedCredentials);
+            await OAuthCredentialStorage.saveCredentials(mergedCredentials);
+            logToFile('Token refreshed and saved successfully via cloud function');
+        } catch (error) {
+            logToFile(`Error during token refresh: ${error}`);
+            throw error;
+        }
     }
 
     private async getAvailablePort(): Promise<number> {
