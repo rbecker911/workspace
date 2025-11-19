@@ -27,7 +27,15 @@ const deleteFilesByExtension = (dir, ext) => {
 };
 
 const main = async () => {
-  const name = 'google-workspace-extension';
+  const platform = argv.platform;
+  if (platform && typeof platform !== 'string') {
+    console.error(
+      'Error: The --platform argument must be a string (e.g., --platform=linux).'
+    );
+    process.exit(1);
+  }
+  const baseName = 'google-workspace-extension';
+  const name = platform ? `${platform}.${baseName}` : baseName;
   const extension = 'tar.gz';
 
   const rootDir = path.join(__dirname, '..');
