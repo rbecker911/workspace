@@ -24,6 +24,10 @@ type SendEmailParams = {
   isHtml?: boolean;
 };
 
+type CreateDraftParams = SendEmailParams & {
+  threadId?: string;
+};
+
 interface GmailAttachment {
   filename: string | null | undefined;
   mimeType: string | null | undefined;
@@ -364,9 +368,48 @@ export class GmailService {
     cc,
     bcc,
     isHtml = false,
-  }: SendEmailParams) => {
+    threadId,
+  }: CreateDraftParams) => {
     try {
       logToFile(`Creating draft - to: ${to}, subject: ${subject}`);
+
+      const gmail = await this.getGmailClient();
+
+      // If threadId is provided, fetch the last message to get reply headers
+      let inReplyTo: string | undefined;
+      let references: string | undefined;
+      if (threadId) {
+        try {
+          const threadResponse = await gmail.users.threads.get({
+            userId: 'me',
+            id: threadId,
+            format: 'metadata',
+            metadataHeaders: ['Message-ID', 'References'],
+          });
+          const messages = threadResponse.data.messages || [];
+          if (messages.length > 0) {
+            const lastMessage = messages[messages.length - 1];
+            const headers = lastMessage.payload?.headers || [];
+            const messageIdHeader = headers.find(
+              (h) => h.name?.toLowerCase() === 'message-id',
+            );
+            const referencesHeader = headers.find(
+              (h) => h.name?.toLowerCase() === 'references',
+            );
+            if (messageIdHeader?.value) {
+              inReplyTo = messageIdHeader.value;
+              const previousReferences = referencesHeader?.value || '';
+              references = previousReferences
+                ? `${previousReferences} ${messageIdHeader.value}`
+                : messageIdHeader.value;
+            }
+          }
+        } catch (threadError) {
+          logToFile(
+            `Warning: Could not fetch thread ${threadId} for reply headers: ${threadError}`,
+          );
+        }
+      }
 
       // Create MIME message
       const mimeMessage = MimeHelper.createMimeMessage({
@@ -376,14 +419,16 @@ export class GmailService {
         cc: cc ? (Array.isArray(cc) ? cc.join(', ') : cc) : undefined,
         bcc: bcc ? (Array.isArray(bcc) ? bcc.join(', ') : bcc) : undefined,
         isHtml,
+        inReplyTo,
+        references,
       });
 
-      const gmail = await this.getGmailClient();
       const response = await gmail.users.drafts.create({
         userId: 'me',
         requestBody: {
           message: {
             raw: mimeMessage,
+            ...(threadId && { threadId }),
           },
         },
       });
