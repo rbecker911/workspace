@@ -337,6 +337,51 @@ async function main() {
 
   // Slides tools
   server.registerTool(
+    'slides.create',
+    {
+      description: 'Creates a new Google Slides presentation.',
+      inputSchema: {
+        title: z.string().describe('The title of the new presentation.'),
+      },
+    },
+    slidesService.create,
+  );
+
+  server.registerTool(
+    'slides.createFromTemplate',
+    {
+      description:
+        'Creates a new Google Slides presentation by copying an existing template.',
+      inputSchema: {
+        templateId: z
+          .string()
+          .describe('The ID of the template presentation to copy.'),
+        title: z.string().describe('The title of the new presentation.'),
+      },
+    },
+    slidesService.createFromTemplate,
+  );
+
+  server.registerTool(
+    'slides.replaceAllText',
+    {
+      description:
+        'Replaces text in a Google Slides presentation. Useful for populating templates.',
+      inputSchema: {
+        presentationId: z
+          .string()
+          .describe('The ID of the presentation to update.'),
+        replacements: z
+          .record(z.string())
+          .describe(
+            'A map of text to find and replace. Key is the text to find, value is the replacement text.',
+          ),
+      },
+    },
+    slidesService.replaceAllText,
+  );
+
+  server.registerTool(
     'slides.getText',
     {
       description:

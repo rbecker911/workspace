@@ -465,4 +465,170 @@ describe('SlidesService', () => {
       expect(response.error).toBe('API Error');
     });
   });
+
+  describe('create', () => {
+    beforeEach(() => {
+      mockSlidesAPI.presentations.create = jest.fn();
+    });
+
+    it('should create a new presentation', async () => {
+      const mockPresentation = {
+        data: {
+          presentationId: 'new-pres-id',
+          title: 'New Presentation',
+        },
+      };
+
+      mockSlidesAPI.presentations.create.mockResolvedValue(mockPresentation);
+
+      const result = await slidesService.create({ title: 'New Presentation' });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(mockSlidesAPI.presentations.create).toHaveBeenCalledWith({
+        requestBody: {
+          title: 'New Presentation',
+        },
+      });
+
+      expect(response.presentationId).toBe('new-pres-id');
+      expect(response.title).toBe('New Presentation');
+      expect(response.url).toContain('new-pres-id');
+    });
+
+    it('should handle errors gracefully', async () => {
+      mockSlidesAPI.presentations.create.mockRejectedValue(
+        new Error('Create Error'),
+      );
+
+      const result = await slidesService.create({ title: 'Error' });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(response.error).toBe('Create Error');
+    });
+  });
+
+  describe('createFromTemplate', () => {
+    beforeEach(() => {
+      mockDriveAPI.files.copy = jest.fn();
+    });
+
+    it('should create a presentation from a template', async () => {
+      const mockCopy = {
+        data: {
+          id: 'new-copy-id',
+          name: 'New Copy',
+        },
+      };
+
+      mockDriveAPI.files.copy.mockResolvedValue(mockCopy);
+
+      const result = await slidesService.createFromTemplate({
+        templateId: 'template-id',
+        title: 'New Copy',
+      });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(mockDriveAPI.files.copy).toHaveBeenCalledWith({
+        fileId: 'template-id',
+        requestBody: {
+          name: 'New Copy',
+        },
+      });
+
+      expect(response.presentationId).toBe('new-copy-id');
+      expect(response.title).toBe('New Copy');
+      expect(response.url).toContain('new-copy-id');
+    });
+
+    it('should handle errors gracefully', async () => {
+      mockDriveAPI.files.copy.mockRejectedValue(new Error('Copy Error'));
+
+      const result = await slidesService.createFromTemplate({
+        templateId: 'template-id',
+        title: 'Error',
+      });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(response.error).toBe('Copy Error');
+    });
+  });
+
+  describe('replaceAllText', () => {
+    beforeEach(() => {
+      mockSlidesAPI.presentations.batchUpdate = jest.fn();
+    });
+
+    it('should replace text in a presentation', async () => {
+      const mockResponse = {
+        data: {
+          replies: [{}, {}],
+        },
+      };
+
+      mockSlidesAPI.presentations.batchUpdate.mockResolvedValue(mockResponse);
+
+      const replacements = {
+        '{{name}}': 'Alice',
+        '{{date}}': '2023-01-01',
+      };
+
+      const result = await slidesService.replaceAllText({
+        presentationId: 'pres-id',
+        replacements,
+      });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(mockSlidesAPI.presentations.batchUpdate).toHaveBeenCalledWith({
+        presentationId: 'pres-id',
+        requestBody: {
+          requests: [
+            {
+              replaceAllText: {
+                containsText: {
+                  text: '{{name}}',
+                  matchCase: true,
+                },
+                replaceText: 'Alice',
+              },
+            },
+            {
+              replaceAllText: {
+                containsText: {
+                  text: '{{date}}',
+                  matchCase: true,
+                },
+                replaceText: '2023-01-01',
+              },
+            },
+          ],
+        },
+      });
+
+      expect(response.replies).toHaveLength(2);
+    });
+
+    it('should return message when no replacements provided', async () => {
+      const result = await slidesService.replaceAllText({
+        presentationId: 'pres-id',
+        replacements: {},
+      });
+
+      expect(result.content[0].text).toBe('No replacements provided.');
+      expect(mockSlidesAPI.presentations.batchUpdate).not.toHaveBeenCalled();
+    });
+
+    it('should handle errors gracefully', async () => {
+      mockSlidesAPI.presentations.batchUpdate.mockRejectedValue(
+        new Error('Update Error'),
+      );
+
+      const result = await slidesService.replaceAllText({
+        presentationId: 'pres-id',
+        replacements: { a: 'b' },
+      });
+      const response = JSON.parse(result.content[0].text);
+
+      expect(response.error).toBe('Update Error');
+    });
+  });
 });
