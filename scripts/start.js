@@ -36,9 +36,12 @@ function runCommand(command, args, options) {
 
 async function main() {
   try {
-    await runCommand('npm', ['install'], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
+    const fs = require('node:fs');
+    if (!fs.existsSync(path.join(__dirname, '..', 'node_modules'))) {
+      await runCommand('npm', ['install'], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+      });
+    }
 
     const SERVER_PATH = path.join(
       __dirname,
