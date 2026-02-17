@@ -115,6 +115,162 @@ export class SlidesService {
     }
   };
 
+  public create = async ({ title }: { title: string }) => {
+    logToFile(`[SlidesService] Creating new presentation with title: ${title}`);
+    try {
+      const slides = await this.getSlidesClient();
+      const presentation = await slides.presentations.create({
+        requestBody: {
+          title,
+        },
+      });
+      logToFile(
+        `[SlidesService] Created presentation with ID: ${presentation.data.presentationId}`,
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              presentationId: presentation.data.presentationId,
+              title: presentation.data.title,
+              url: `https://docs.google.com/presentation/d/${presentation.data.presentationId}/edit`,
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      logToFile(`[SlidesService] Error during slides.create: ${errorMessage}`);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ error: errorMessage }),
+          },
+        ],
+      };
+    }
+  };
+
+  public createFromTemplate = async ({
+    templateId,
+    title,
+  }: {
+    templateId: string;
+    title: string;
+  }) => {
+    logToFile(
+      `[SlidesService] Creating presentation from template: ${templateId} with title: ${title}`,
+    );
+    try {
+      const drive = await this.getDriveClient();
+      const copy = await drive.files.copy({
+        fileId: templateId,
+        requestBody: {
+          name: title,
+        },
+      });
+      logToFile(`[SlidesService] Created copy with ID: ${copy.data.id}`);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              presentationId: copy.data.id,
+              title: copy.data.name,
+              url: `https://docs.google.com/presentation/d/${copy.data.id}/edit`,
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      logToFile(
+        `[SlidesService] Error during slides.createFromTemplate: ${errorMessage}`,
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ error: errorMessage }),
+          },
+        ],
+      };
+    }
+  };
+
+  public replaceAllText = async ({
+    presentationId,
+    replacements,
+  }: {
+    presentationId: string;
+    replacements: Record<string, string>;
+  }) => {
+    logToFile(
+      `[SlidesService] Replacing text in presentation: ${presentationId}`,
+    );
+    try {
+      const id = extractDocId(presentationId) || presentationId;
+      const slides = await this.getSlidesClient();
+      const requests = Object.entries(replacements).map(([key, value]) => ({
+        replaceAllText: {
+          containsText: {
+            text: key,
+            matchCase: true,
+          },
+          replaceText: value,
+        },
+      }));
+
+      if (requests.length === 0) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: 'No replacements provided.',
+            },
+          ],
+        };
+      }
+
+      const response = await slides.presentations.batchUpdate({
+        presentationId: id,
+        requestBody: {
+          requests,
+        },
+      });
+
+      logToFile(`[SlidesService] Text replacement complete.`);
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({
+              replies: response.data.replies,
+            }),
+          },
+        ],
+      };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      logToFile(
+        `[SlidesService] Error during slides.replaceAllText: ${errorMessage}`,
+      );
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify({ error: errorMessage }),
+          },
+        ],
+      };
+    }
+  };
+
   private extractTextFromTextContent(
     textContent: slides_v1.Schema$TextContent,
   ): string {
