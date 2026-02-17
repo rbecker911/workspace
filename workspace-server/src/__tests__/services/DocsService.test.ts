@@ -20,10 +20,8 @@ import { google } from 'googleapis';
 // Mock the googleapis module
 jest.mock('googleapis');
 jest.mock('../../utils/logger');
-jest.mock('dompurify', () => {
-  return jest.fn().mockImplementation(() => ({
-    sanitize: jest.fn((content) => content),
-  }));
+jest.mock('sanitize-html', () => {
+  return jest.fn().mockImplementation((content) => content);
 });
 
 describe('DocsService', () => {

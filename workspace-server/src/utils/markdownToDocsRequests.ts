@@ -6,7 +6,6 @@
 
 import { docs_v1 } from 'googleapis';
 import { marked } from 'marked';
-import { JSDOM } from 'jsdom';
 
 interface FormatRange {
   start: number;
@@ -24,132 +23,106 @@ interface ParsedMarkdown {
 
 /**
  * Parses markdown text and generates Google Docs API requests for formatting.
- * Uses the marked library to convert to HTML, then parses the HTML to extract formatting.
+ * Uses the marked library to lex markdown tokens and extract formatting.
  */
 export function parseMarkdownToDocsRequests(
   markdown: string,
   startIndex: number,
 ): ParsedMarkdown {
-  // Split markdown into lines to handle block elements like headings
+  // Split markdown into lines to handle block elements like headings manually
+  // This preserves the original behavior of treating lines as separate blocks
   const lines = markdown.split('\n');
-  const htmlParts: string[] = [];
 
-  for (const line of lines) {
+  let plainText = '';
+  const formattingRanges: FormatRange[] = [];
+  const lexer = new marked.Lexer();
+
+  // Helper function to process tokens recursively
+  function processTokens(tokens: any[]) {
+    tokens.forEach((token) => {
+      const start = plainText.length;
+
+      if (token.type === 'text' || token.type === 'escape') {
+        if (token.tokens) {
+          processTokens(token.tokens);
+        } else {
+          // marked decodes HTML entities in text, so we get the plain text directly
+          plainText += token.text;
+        }
+      } else if (token.type === 'strong') {
+        if (token.tokens) processTokens(token.tokens);
+        else plainText += token.text;
+
+        const end = plainText.length;
+        formattingRanges.push({ start, end, type: 'bold' });
+      } else if (token.type === 'em') {
+        if (token.tokens) processTokens(token.tokens);
+        else plainText += token.text;
+
+        const end = plainText.length;
+        formattingRanges.push({ start, end, type: 'italic' });
+      } else if (token.type === 'codespan') {
+        // codespan text is usually the raw code content
+        plainText += token.text;
+        const end = plainText.length;
+        formattingRanges.push({ start, end, type: 'code' });
+      } else if (token.type === 'link') {
+        if (token.tokens) processTokens(token.tokens);
+        else plainText += token.text;
+
+        const end = plainText.length;
+        formattingRanges.push({ start, end, type: 'link', url: token.href });
+      } else {
+        // Fallback for other tokens
+        if (token.tokens) {
+          processTokens(token.tokens);
+        } else if (token.text) {
+          plainText += token.text;
+        }
+      }
+    });
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
     // Check if this is a heading line
     const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+
     if (headingMatch) {
       const level = headingMatch[1].length;
       const content = headingMatch[2];
+
+      const start = plainText.length;
+
       // Parse inline content within the heading
-      try {
-        const inlineHtml = marked.parseInline(content) as string;
-        htmlParts.push(`<h${level}>${inlineHtml}</h${level}>`);
-      } catch (error) {
-        console.error(
-          'Markdown parsing failed for heading, falling back to raw content:',
-          error,
-        );
-        htmlParts.push(`<h${level}>${content}</h${level}>`);
-      }
+      const tokens = lexer.inlineTokens(content);
+      processTokens(tokens);
+
+      const end = plainText.length;
+
+      // Mark the entire heading range
+      formattingRanges.push({
+        start,
+        end,
+        type: 'heading',
+        headingLevel: level,
+        isParagraph: true,
+      });
+
     } else if (line.trim()) {
-      // For non-heading, non-empty lines, use parseInline
-      try {
-        const inlineHtml = marked.parseInline(line) as string;
-        htmlParts.push(`<p>${inlineHtml}</p>`);
-      } catch (error) {
-        console.error(
-          'Markdown parsing failed for line, falling back to raw content:',
-          error,
-        );
-        htmlParts.push(`<p>${line}</p>`);
-      }
+      // For non-heading, non-empty lines, use inlineTokens
+      const tokens = lexer.inlineTokens(line);
+      processTokens(tokens);
     } else {
-      // Empty lines become paragraph breaks
-      htmlParts.push('');
+      // Empty line - content is empty, just plainText remains unchanged (except for newline added below)
     }
-  }
 
-  // Convert markdown to HTML - handle both block and inline elements
-  const html = htmlParts.join('\n');
-
-  // If no conversion happened, return plain text
-  if (!html || html === markdown) {
-    return {
-      plainText: markdown,
-      formattingRequests: [],
-    };
-  }
-
-  // Parse HTML to extract text and formatting
-  // Create a wrapper div to handle inline HTML that might not have a parent element
-  const dom = new JSDOM(`<div>${html}</div>`);
-  const document = dom.window.document;
-  const wrapper = document.querySelector('div');
-
-  const formattingRanges: FormatRange[] = [];
-  let plainText = '';
-  let currentPos = 0;
-
-  // Recursive function to process nodes
-  function processNode(node: Node) {
-    if (node.nodeType === 3) {
-      // Text node
-      const text = node.textContent || '';
-      plainText += text;
-      currentPos += text.length;
-    } else if (node.nodeType === 1) {
-      // Element node
-      const element = node as HTMLElement;
-      const tagName = element.tagName.toLowerCase();
-
-      const start = currentPos;
-
-      // Process children first to get the text content
-      for (const child of Array.from(node.childNodes)) {
-        processNode(child);
-      }
-
-      const end = currentPos;
-
-      // Record formatting based on tag
-      if (tagName === 'strong' || tagName === 'b') {
-        formattingRanges.push({ start, end, type: 'bold' });
-      } else if (tagName === 'em' || tagName === 'i') {
-        formattingRanges.push({ start, end, type: 'italic' });
-      } else if (tagName === 'code') {
-        formattingRanges.push({ start, end, type: 'code' });
-      } else if (tagName === 'a') {
-        const href = element.getAttribute('href') || '';
-        formattingRanges.push({ start, end, type: 'link', url: href });
-      } else if (tagName.match(/^h[1-6]$/)) {
-        const level = parseInt(tagName.charAt(1));
-        // Mark the entire paragraph range for heading style
-        formattingRanges.push({
-          start,
-          end,
-          type: 'heading',
-          headingLevel: level,
-          isParagraph: true,
-        });
-      } else if (tagName === 'p') {
-        // Add newline after paragraph content if not the last element
-        const nextSibling = element.nextSibling;
-        if (nextSibling && nextSibling.nodeType === 1) {
-          plainText += '\n';
-          currentPos += 1;
-        }
-      }
+    // Add newline after line content if not the last line
+    // This matches the behavior of joining lines with '\n'
+    if (i < lines.length - 1) {
+      plainText += '\n';
     }
-  }
-
-  // Process all nodes
-  if (wrapper) {
-    for (const child of Array.from(wrapper.childNodes)) {
-      processNode(child);
-    }
-  } else {
-    // If parsing failed, just use the plain markdown (no formatting)
-    plainText = markdown;
   }
 
   // Generate formatting requests
