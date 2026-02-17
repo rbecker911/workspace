@@ -11,8 +11,7 @@ import { logToFile } from '../utils/logger';
 import { extractDocId } from '../utils/IdUtils';
 import { marked } from 'marked';
 import { Readable } from 'node:stream';
-import createDOMPurify from 'dompurify';
-import { JSDOM } from 'jsdom';
+import sanitizeHtml from 'sanitize-html';
 import { gaxiosOptions, mediaUploadOptions } from '../utils/GaxiosConfig';
 import { buildDriveSearchQuery, MIME_TYPES } from '../utils/DriveQueryBuilder';
 import { extractDocumentId as validateAndExtractDocId } from '../utils/validation';
@@ -22,15 +21,10 @@ import {
 } from '../utils/markdownToDocsRequests';
 
 export class DocsService {
-  private purify: ReturnType<typeof createDOMPurify>;
-
   constructor(
     private authManager: AuthManager,
     private driveService: DriveService,
-  ) {
-    const window = new JSDOM('').window;
-    this.purify = createDOMPurify(window as any);
-  }
+  ) {}
 
   private async getDocsClient(): Promise<docs_v1.Docs> {
     const auth = await this.authManager.getAuthenticatedClient();
@@ -64,7 +58,7 @@ export class DocsService {
         if (markdown) {
           logToFile('[DocsService] Creating doc with markdown');
           const unsafeHtml = await marked.parse(markdown);
-          const html = this.purify.sanitize(unsafeHtml);
+          const html = sanitizeHtml(unsafeHtml);
 
           const fileMetadata = {
             name: title,
